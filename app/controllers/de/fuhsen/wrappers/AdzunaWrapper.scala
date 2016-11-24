@@ -47,10 +47,10 @@ class AdzunaWrapper extends RestApiWrapperTrait with SilkTransformableTrait {
   /** SILK Transformation Trait **/
   override def silkTransformationRequestTasks = Seq(
     SilkTransformationTask(
-      transformationTaskId = "OCCRPResultsTransformation",
+      transformationTaskId = "AdzunaTransformationTask",
       createSilkTransformationRequestBody(
         basePath = "results",
-        uriPattern = "http://vocab.cs.uni-bonn.de/fuhsen/search/entity/occrp/{id}"
+        uriPattern = "http://www.edsa-project.eu/jobpost/{id}"
       )
     )
   )
@@ -60,5 +60,4 @@ class AdzunaWrapper extends RestApiWrapperTrait with SilkTransformableTrait {
 
   /** The project id of the Silk project */
   override def projectId: String = ConfigFactory.load.getString("silk.socialApiProject.id")
-
 }
