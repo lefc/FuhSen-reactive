@@ -28,7 +28,7 @@ import org.apache.jena.riot.Lang
 import org.apache.jena.sparql.core.Quad
 import play.Logger
 import play.api.libs.concurrent.Execution.Implicits.defaultContext
-import play.api.libs.json.{JsArray, JsString}
+import play.api.libs.json.{JsArray, JsString, Json}
 import play.api.libs.oauth.OAuthCalculator
 import play.api.libs.ws.{WSClient, WSRequest, WSResponse}
 import play.api.mvc.{Action, Controller, Result}
@@ -58,13 +58,13 @@ class WrapperController @Inject()(ws: WSClient) extends Controller {
         }
       case None =>
         Future(NotFound("Wrapper " + wrapperId + " not found! Supported wrapper: " +
-            WrapperController.sortedWrapperIds.mkString(", ")))
+          WrapperController.sortedWrapperIds.mkString(", ")))
     }
   }
 
   private def execQueryAgainstWrapper(query: String, wrapper: RestApiWrapperTrait): Future[ApiResponse] = {
     val apiRequest = createApiRequest(wrapper, query)
-    val apiResponse = executeApiRequest(apiRequest)
+    val apiResponse = executeApiRequest(apiRequest, wrapper)
     val customApiResponse = customApiHandling(wrapper, apiResponse)
     transformApiResponse(wrapper, customApiResponse)
   }
@@ -79,7 +79,7 @@ class WrapperController @Inject()(ws: WSClient) extends Controller {
     val wrappers = (wrapperIds.split(",") map (WrapperController.wrapperMap.get)).toSeq
     if (wrappers.exists(_.isEmpty)) {
       Future(BadRequest("Invalid wrapper requested! Supported wrappers: " +
-          WrapperController.sortedWrapperIds.mkString(", ")))
+        WrapperController.sortedWrapperIds.mkString(", ")))
     } else {
       fetchAndIntegrateWrapperResults(wrappers, query)
     }
@@ -87,6 +87,7 @@ class WrapperController @Inject()(ws: WSClient) extends Controller {
 
   /**
     * Returns the merged result from multiple wrappers in JSON-LD format.
+    *
     * @param query for each wrapper
     * @param wrapperIds a comma-separated list of wrapper ids
     */
@@ -116,13 +117,13 @@ class WrapperController @Inject()(ws: WSClient) extends Controller {
 
   /**
     * Link and merge entities from different sources.
- *
+    *
     * @param wrappers
     * @param query
     * @return
     */
   private def fetchAndIntegrateWrapperResults(wrappers: Seq[Option[RestApiWrapperTrait]],
-                                      query: String): Future[Result] = {
+                                              query: String): Future[Result] = {
     // Fetch the transformed results from each wrapper
     val resultFutures = wrappers.flatten map (wrapper => execQueryAgainstWrapper(query, wrapper))
     Future.sequence(resultFutures) flatMap { results =>
@@ -140,7 +141,7 @@ class WrapperController @Inject()(ws: WSClient) extends Controller {
   private def datasetToNQuadsResult(rewrittenDataset: Future[Dataset]): Future[Result] = {
     rewrittenDataset map { d =>
       Ok(datasetToQuadString(d, Lang.JSONLD)).
-          withHeaders(("content-type", Lang.JSONLD.getContentType.getContentType))
+        withHeaders(("content-type", Lang.JSONLD.getContentType.getContentType))
     }
   }
 
@@ -214,7 +215,7 @@ class WrapperController @Inject()(ws: WSClient) extends Controller {
         apiResponse.flatMap {
           case ApiSuccess(body) =>
             customFn(body).
-                map(customResult => ApiSuccess(customResult))
+              map(customResult => ApiSuccess(customResult))
           case r: ApiError =>
             Future(r)
         }
@@ -231,21 +232,36 @@ class WrapperController @Inject()(ws: WSClient) extends Controller {
         // There has been an error previously, don't go on.
         Future(error)
       case ApiSuccess(body) =>
-        Logger.debug("PRE-SILK: "+body)
-        handleSilkTransformation(wrapper, body)
+        if(wrapper.sourceLocalName.equals("indeed")){
+          Logger.debug("PRE-SILK: "+body)
+
+          print("ORIGINAL XML: "+body)
+          print("PRE-SILK: "+xml.Utility.escape(body))
+
+          handleSilkTransformation(wrapper, xml.Utility.escape(body))
+        }else{
+          Logger.debug("PRE-SILK: "+body)
+          handleSilkTransformation(wrapper, body)
+        }
     }
   }
 
   /** Executes the request to the wrapped REST API */
-  private def executeApiRequest(apiRequest: WSRequest): Future[ApiResponse] = {
-    apiRequest.get.map(convertToApiResponse("Wrapper or the wrapped service"))
+  private def executeApiRequest(apiRequest: WSRequest, wrapper: RestApiWrapperTrait): Future[ApiResponse] = {
+    if(wrapper.requestType.equals("POST")){
+      print("POST")
+      apiRequest.withHeaders("Content-Type"->"application/x-www-form-urlencoded", "Content-Length"->"31").post("{'keywords': 'account manager'}").map(convertToApiResponse("Wrapper or the wrapped service"))
+    }else{
+      print("GET")
+      apiRequest.get.map(convertToApiResponse("Wrapper or the wrapped service"))
+    }
   }
 
   /** If transformations are configured then execute them via the Silk REST API */
   def handleSilkTransformation(wrapper: RestApiWrapperTrait,
                                content: String,
                                acceptType: String = "text/turtle"): Future[ApiResponse] = {
-                               //acceptType: String = "text/csv"): Future[ApiResponse] = {
+    //acceptType: String = "text/csv"): Future[ApiResponse] = {
     wrapper match {
       case silkTransform: SilkTransformableTrait if silkTransform.silkTransformationRequestTasks.size > 0 =>
         Logger.info("Execute Silk Transformations")
@@ -267,11 +283,11 @@ class WrapperController @Inject()(ws: WSClient) extends Controller {
       Logger.info("Executing silk transformation: "+transform.transformationTaskId)
       //val task = silkTransform.silkTransformationRequestTasks.head
       val transformRequest = ws.url(silkTransform.transformationEndpoint(transform.transformationTaskId))
-          .withHeaders("Content-Type" -> "application/xml; charset=utf-8")
-          //.withHeaders("Accept" -> acceptType)
+        .withHeaders("Content-Type" -> "application/xml; charset=utf-8")
+      //.withHeaders("Accept" -> acceptType)
       val response = transformRequest
-          .post(transform.silkTransformationRequestBodyGenerator(content))
-          .map(convertToApiResponse("Silk transformation endpoint"))
+        .post(transform.silkTransformationRequestBodyGenerator(content))
+        .map(convertToApiResponse("Silk transformation endpoint"))
       response
     }
   }
@@ -303,10 +319,10 @@ class WrapperController @Inject()(ws: WSClient) extends Controller {
     )
     val entityLinking = new EntityLinking(silkConfig)
     val linkRequest = ws.url(silkConfig.endpoint)
-        .withHeaders("Content-Type" -> "application/xml")
-        .withHeaders("Accept" -> acceptType)
+      .withHeaders("Content-Type" -> "application/xml")
+      .withHeaders("Accept" -> acceptType)
     linkRequest.post(entityLinking.linkTemplate(content, acceptTypeToRdfLang(acceptType)))
-        .map(convertToApiResponse("Silk linking service"))
+      .map(convertToApiResponse("Silk linking service"))
   }
 
   /** Merge all transformation results into a single model and return the serialized model */
@@ -358,12 +374,12 @@ class WrapperController @Inject()(ws: WSClient) extends Controller {
     wrapper match {
       case oAuthWrapper: RestApiOAuthTrait =>
         request
-            .sign(OAuthCalculator(
-              oAuthWrapper.oAuthConsumerKey,
-              oAuthWrapper.oAuthRequestToken))
+          .sign(OAuthCalculator(
+            oAuthWrapper.oAuthConsumerKey,
+            oAuthWrapper.oAuthRequestToken))
 
       case oAuth2Wrapper: RestApiOAuth2Trait =>
-          request.withQueryString("access_token" -> oAuth2Wrapper.oAuth2AccessToken)
+        request.withQueryString("access_token" -> oAuth2Wrapper.oAuth2AccessToken)
       case _ =>
         request
     }
@@ -399,7 +415,16 @@ object WrapperController {
     //Xing
     "xing" -> new XingWrapper(),
     //Elastic Search
-    "elasticsearch" -> new ElasticSearchWrapper()
+    "elasticsearch" -> new ElasticSearchWrapper(),
+
+    //EDSA WRAPPERS:
+
+    //ADZUNA
+    "adzuna" -> new AdzunaWrapper(),
+    //INDEED
+    "indeed" -> new IndeedWrapper(),
+    //JOOBLE
+    "jooble" -> new JoobleWrapper()
   )
 
   val sortedWrapperIds = wrapperMap.keys.toSeq.sortWith(_ < _)
