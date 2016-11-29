@@ -26,14 +26,14 @@ class AdzunaWrapper extends RestApiWrapperTrait with SilkTransformableTrait {
   /** Query parameters that should be added to the request. */
   override def queryParams: Map[String, String] = Map("app_id" -> ConfigFactory.load.getString("adzuna.search.app_id"),
     "app_key" -> ConfigFactory.load.getString("adzuna.search.app_key"),
-    "results_per_page" -> "15")
+    "results_per_page" -> "50")
 
   /** Headers that should be added to the request. */
   override def headersParams: Map[String, String] = Map("Accept" -> "application/json")
 
   /** Returns for a given query string the representation as query parameter for the specific API. */
   override def searchQueryAsParam(queryString: String): Map[String, String] = {
-    Map()
+    Map("what" -> queryString)
   }
 
   /** The REST endpoint URL */

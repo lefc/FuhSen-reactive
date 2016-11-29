@@ -109,7 +109,7 @@ class WrapperController @Inject()(ws: WSClient) extends Controller {
           }
         }
         //val resultDataset = requestMerger.constructQuadDataset()
-        Ok(requestMerger.serializeMergedModel(Lang.JSONLD))
+        Ok(requestMerger.serializeMergedModel(Lang.NTRIPLES))
       }
     }
   }
@@ -233,12 +233,9 @@ class WrapperController @Inject()(ws: WSClient) extends Controller {
         Future(error)
       case ApiSuccess(body) =>
         if(wrapper.sourceLocalName.equals("indeed")){
-          Logger.debug("PRE-SILK: "+body)
-
-          print("ORIGINAL XML: "+body)
-          print("PRE-SILK: "+xml.Utility.escape(body))
-
-          handleSilkTransformation(wrapper, xml.Utility.escape(body))
+          val bodyS = body.replace("<?xml version='1.0' encoding='UTF-8'?>","")
+          Logger.debug("PRE-SILK: "+bodyS)
+          handleSilkTransformation(wrapper, bodyS)
         }else{
           Logger.debug("PRE-SILK: "+body)
           handleSilkTransformation(wrapper, body)
@@ -249,10 +246,10 @@ class WrapperController @Inject()(ws: WSClient) extends Controller {
   /** Executes the request to the wrapped REST API */
   private def executeApiRequest(apiRequest: WSRequest, wrapper: RestApiWrapperTrait): Future[ApiResponse] = {
     if(wrapper.requestType.equals("POST")){
-      print("POST")
+      Logger.info("POST wrapper request")
       apiRequest.withHeaders("Content-Type"->"application/x-www-form-urlencoded", "Content-Length"->"31").post("{'keywords': 'account manager'}").map(convertToApiResponse("Wrapper or the wrapped service"))
     }else{
-      print("GET")
+      Logger.info("GET wrapper request")
       apiRequest.get.map(convertToApiResponse("Wrapper or the wrapped service"))
     }
   }
@@ -336,7 +333,7 @@ class WrapperController @Inject()(ws: WSClient) extends Controller {
         case ApiError(statusCode, errorMessage) =>
           Logger.warn(s"Got status code $statusCode with message: $errorMessage")
       }
-      modelToTripleString(model, "application/ld+json")
+      modelToTripleString(model, "application/n-triples")
     }
   }
 

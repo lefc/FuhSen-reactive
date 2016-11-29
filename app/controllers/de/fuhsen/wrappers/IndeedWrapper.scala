@@ -42,7 +42,7 @@ class IndeedWrapper extends RestApiWrapperTrait with SilkTransformableTrait {
     "v" -> "2")
 
   /** Headers that should be added to the request. */
-  override def headersParams: Map[String, String] = Map("Accept" -> "application/json")
+  override def headersParams: Map[String, String] = Map( "Content-Type" -> "application/xml", "Accept" -> "application/json")
 
   /** Returns for a given query string the representation as query parameter for the specific API. */
   override def searchQueryAsParam(queryString: String): Map[String, String] = {
@@ -63,13 +63,13 @@ class IndeedWrapper extends RestApiWrapperTrait with SilkTransformableTrait {
       transformationTaskId = "IndeedTransformationTask",
       createSilkTransformationRequestBody(
         basePath = "/response/results/result",
-        uriPattern = "http://www.edsa-project.eu/jobpost/{jobkey}"
+        uriPattern = ""
       )
     )
   )
 
   /** The type of the transformation input. */
-  override def datasetPluginType: DatasetPluginType = DatasetPluginType.JsonDatasetPlugin
+  override def datasetPluginType: DatasetPluginType = DatasetPluginType.XmlDatasetPlugin
 
   /** The project id of the Silk project */
   override def projectId: String = ConfigFactory.load.getString("silk.socialApiProject.id")
