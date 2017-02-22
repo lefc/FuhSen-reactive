@@ -15,15 +15,17 @@
  */
 package controllers.de.fuhsen.wrappers
 
+import java.io._
 import java.util.concurrent.atomic.AtomicInteger
 import javax.inject.Inject
 
 import com.typesafe.config.ConfigFactory
+import controllers.Application
 import controllers.de.fuhsen.wrappers.dataintegration.{EntityLinking, SilkConfig, SilkTransformableTrait}
 import controllers.de.fuhsen.wrappers.security.{RestApiOAuth2Trait, RestApiOAuthTrait}
 import org.apache.jena.graph.Triple
-import org.apache.jena.query.{Dataset, DatasetFactory}
-import org.apache.jena.rdf.model.ModelFactory
+import org.apache.jena.query.{Dataset, DatasetFactory, QueryExecutionFactory, QueryFactory}
+import org.apache.jena.rdf.model.{Model, ModelFactory}
 import org.apache.jena.riot.Lang
 import org.apache.jena.sparql.core.Quad
 import play.Logger
@@ -33,10 +35,10 @@ import play.api.libs.oauth.OAuthCalculator
 import play.api.libs.ws.{WSClient, WSRequest, WSResponse}
 import play.api.mvc.{Action, Controller, Result}
 import utils.dataintegration.RDFUtil._
-import utils.dataintegration.{RequestMerger, UriTranslator}
+import utils.dataintegration.{RDFUtil, RequestMerger, UriTranslator}
 import controllers.de.fuhsen.common.{ApiError, ApiResponse, ApiSuccess}
 
-import scala.collection.mutable.ArrayBuffer
+import scala.collection.mutable.{ArrayBuffer, ListBuffer}
 import scala.concurrent.Future
 
 /**
@@ -50,7 +52,7 @@ class WrapperController @Inject()(ws: WSClient) extends Controller {
     WrapperController.wrapperMap.get(wrapperId) match {
       case Some(wrapper) =>
         Logger.info(s"Starting $wrapperId Search with query: " + query)
-        execQueryAgainstWrapper(query, wrapper) map {
+        execQueryAgainstWrapper(query, wrapper, None, None) map {
           case errorResult: ApiError =>
             InternalServerError(errorResult.errorMessage + " API status code: " + errorResult.statusCode)
           case success: ApiSuccess =>
@@ -62,11 +64,88 @@ class WrapperController @Inject()(ws: WSClient) extends Controller {
     }
   }
 
-  private def execQueryAgainstWrapper(query: String, wrapper: RestApiWrapperTrait): Future[ApiResponse] = {
-    val apiRequest = createApiRequest(wrapper, query)
+  def edsa_search(edsaWrapperId: String) = Action.async {
+
+    val model_skills : Model = ModelFactory.createDefaultModel()
+    model_skills.read("EDSA_docs/skillNames_temp.ttl")
+    val skill_list = ListBuffer[String]()
+
+    val skillsQuery = QueryFactory.create(
+      s"""
+         |PREFIX ns3: <http://www.edsa-project.eu/edsa#>
+         |SELECT ?skill WHERE {
+         |?s ns3:lexicalValue ?skill .
+         |}
+      """.stripMargin)
+    val resultSet_skills = QueryExecutionFactory.create(skillsQuery, model_skills).execSelect()
+    while( resultSet_skills.hasNext ){
+      skill_list.append(resultSet_skills.next.get("skill").toString)
+    }
+
+    val model : Model = ModelFactory.createDefaultModel()
+    model.read("EDSA_docs/countries_europe_eu_member_status.rdf")
+    val country_list = ListBuffer[String]()
+
+    val keywordQuery = QueryFactory.create(
+      s"""
+         |PREFIX gn:<http://www.geonames.org/ontology#>
+         |SELECT ?country WHERE {
+         |?s gn:name ?country .
+         |}
+      """.stripMargin)
+    val resultSet = QueryExecutionFactory.create(keywordQuery, model).execSelect()
+    while( resultSet.hasNext ){
+      countryToISO8601(resultSet.next.get("country").toString) match {
+        case Some(value) => country_list.append(value)
+        case None =>
+      }
+    }
+
+    val requestMerger = new RequestMerger()
+    val wrapper = WrapperController.wrapperMap.get(edsaWrapperId).get
+
+    val future_bodies =  for { x <- country_list
+                               y <- skill_list
+    } yield (
+        execQueryAgainstWrapper(y, wrapper, Option("1"), Option(x)) map {
+                    result => result match {
+                      case ApiSuccess(responseBody) => rdfStringToModel(responseBody, Lang.TURTLE.getName)
+                      //case _: ApiError =>
+                    }
+                  }
+      )
+
+    Future.sequence(future_bodies) map {
+      models => for(current_model <- models){
+        requestMerger.addWrapperResult(current_model, wrapper.sourceUri)
+      }
+
+      val pw = new PrintWriter(new File("EDSA_docs/complete.ttl"))
+      pw.write(requestMerger.serializeMergedModel(Lang.NTRIPLES))
+      pw.close
+
+      //As the results could be enormous, this line is just for testing, should be change to "Ok()" (or similar) when selecting all the skills and all the countries.
+      Ok(requestMerger.serializeMergedModel(Lang.NTRIPLES))
+    }
+  }
+
+  private def countryToISO8601(country: String): Option[String] = {
+    country match {
+      //case "United Kingdom" => Some("gb")
+      case "Germany" => Some("de")
+      case "France" => Some("fr")
+      //case "Netherlands" => Some("nl")
+      //case "Poland" => Some("pl")
+      //case "Russia" => Some("ru")
+      case _ => None
+    }
+  }
+
+  private def execQueryAgainstWrapper(query: String, wrapper: RestApiWrapperTrait, page: Option[String], country: Option[String]): Future[ApiResponse] = {
+    val apiRequest = createApiRequest(wrapper, query, page: Option[String], country: Option[String])
     val apiResponse = executeApiRequest(apiRequest, wrapper)
     val customApiResponse = customApiHandling(wrapper, apiResponse)
-    transformApiResponse(wrapper, customApiResponse)
+    transformApiResponse(wrapper, customApiResponse, query, country)
   }
 
   /**
@@ -98,12 +177,12 @@ class WrapperController @Inject()(ws: WSClient) extends Controller {
         WrapperController.sortedWrapperIds.mkString(", ")))
     } else {
       val requestMerger = new RequestMerger()
-      val resultFutures = wrappers.flatten map (wrapper => execQueryAgainstWrapper(query, wrapper))
+      val resultFutures = wrappers.flatten map (wrapper => execQueryAgainstWrapper(query, wrapper, None, None))
       Future.sequence(resultFutures) map { results =>
         for ((wrapperResult, wrapper) <- results.zip(wrappers.flatten)) {
           wrapperResult match {
             case ApiSuccess(responseBody) => Logger.debug("POST-SILK:"+responseBody)
-              val model = rdfStringToModel(responseBody, Lang.JSONLD.getName) //Review
+              val model = rdfStringToModel(responseBody, Lang.TURTLE.getName) //Review
               requestMerger.addWrapperResult(model, wrapper.sourceUri)
             case _: ApiError =>
           }
@@ -125,7 +204,7 @@ class WrapperController @Inject()(ws: WSClient) extends Controller {
   private def fetchAndIntegrateWrapperResults(wrappers: Seq[Option[RestApiWrapperTrait]],
                                               query: String): Future[Result] = {
     // Fetch the transformed results from each wrapper
-    val resultFutures = wrappers.flatten map (wrapper => execQueryAgainstWrapper(query, wrapper))
+    val resultFutures = wrappers.flatten map (wrapper => execQueryAgainstWrapper(query, wrapper, None, None))
     Future.sequence(resultFutures) flatMap { results =>
       // Merge results
       val requestMerger = mergeWrapperResults(wrappers, results)
@@ -226,20 +305,29 @@ class WrapperController @Inject()(ws: WSClient) extends Controller {
 
   /** Handles transformation if configured for the wrapper */
   private def transformApiResponse(wrapper: RestApiWrapperTrait,
-                                   apiResponse: Future[ApiResponse]): Future[ApiResponse] = {
-    apiResponse.flatMap {
-      case error: ApiError =>
-        // There has been an error previously, don't go on.
-        Future(error)
-      case ApiSuccess(body) =>
-        if(wrapper.sourceLocalName.equals("indeed")){
-          val bodyS = body.replace("<?xml version='1.0' encoding='UTF-8'?>","")
-          Logger.debug("PRE-SILK: "+bodyS)
-          handleSilkTransformation(wrapper, bodyS)
-        }else{
-          Logger.debug("PRE-SILK: "+body)
-          handleSilkTransformation(wrapper, body)
-        }
+                                   apiResponse: Future[ApiResponse],
+                                   query: String,
+                                   country: Option[String]): Future[ApiResponse] = {
+    if(wrapper.sourceLocalName.equals("jooble")) {
+      val joobleResponse = new Application().postRequest(query, country.get)
+      Logger.debug("PRE-SILK (JOOBLE): "+joobleResponse )
+      handleSilkTransformation(wrapper, joobleResponse.replace("\\r", ""))
+    }else{
+      Logger.debug("PRE-SILK: "+ apiResponse.value )
+      apiResponse.flatMap {
+        case error: ApiError =>
+          // There has been an error previously, don't go on.
+          Future(error)
+        case ApiSuccess(body) =>
+          if(wrapper.sourceLocalName.equals("indeed")){
+            val bodyS = body.replace("<?xml version='1.0' encoding='UTF-8'?>","")
+            Logger.debug("PRE-SILK: "+bodyS)
+            handleSilkTransformation(wrapper, bodyS)
+          } else{
+            Logger.debug("PRE-SILK: "+body)
+            handleSilkTransformation(wrapper, body)
+          }
+      }
     }
   }
 
@@ -247,9 +335,11 @@ class WrapperController @Inject()(ws: WSClient) extends Controller {
   private def executeApiRequest(apiRequest: WSRequest, wrapper: RestApiWrapperTrait): Future[ApiResponse] = {
     if(wrapper.requestType.equals("POST")){
       Logger.info("POST wrapper request")
-      apiRequest.withHeaders("Content-Type"->"application/x-www-form-urlencoded", "Content-Length"->"31").post("{'keywords': 'account manager'}").map(convertToApiResponse("Wrapper or the wrapped service"))
+      //apiRequest.withHeaders("Content-Type"->"application/x-www-form-urlencoded", "Content-Length"->"31").post("{'keywords': 'account manager'}").map(convertToApiResponse("Wrapper or the wrapped service"))
+      null
     }else{
       Logger.info("GET wrapper request")
+      Logger.info(apiRequest.url)
       apiRequest.get.map(convertToApiResponse("Wrapper or the wrapped service"))
     }
   }
@@ -280,8 +370,10 @@ class WrapperController @Inject()(ws: WSClient) extends Controller {
       Logger.info("Executing silk transformation: "+transform.transformationTaskId)
       //val task = silkTransform.silkTransformationRequestTasks.head
       val transformRequest = ws.url(silkTransform.transformationEndpoint(transform.transformationTaskId))
-        .withHeaders("Content-Type" -> "application/xml; charset=utf-8")
-      //.withHeaders("Accept" -> acceptType)
+        //.withHeaders("Content-Type" -> "application/xml; charset=utf-8")
+        //.withHeaders("Content-Type" -> "application/json; charset=utf-8")
+        .withHeaders("Accept" -> "application/json; charset=utf-8")
+        //.withHeaders("Accept" -> acceptType)
       val response = transformRequest
         .post(transform.silkTransformationRequestBodyGenerator(content))
         .map(convertToApiResponse("Silk transformation endpoint"))
@@ -338,9 +430,9 @@ class WrapperController @Inject()(ws: WSClient) extends Controller {
   }
 
   /** Creates the complete API REST request and executes it asynchronously. */
-  def createApiRequest(wrapper: RestApiWrapperTrait, query: String): WSRequest = {
+  def createApiRequest(wrapper: RestApiWrapperTrait, query: String, page: Option[String], country: Option[String]): WSRequest = {
     val apiRequest: WSRequest = ws.url(wrapper.apiUrl)
-    val apiRequestWithApiParams = addQueryParameters(wrapper, apiRequest, query)
+    val apiRequestWithApiParams = addQueryParameters(wrapper, apiRequest, query, page: Option[String], country: Option[String])
     val apiRequestWithOAuthIfNeeded = handleOAuth(wrapper, apiRequestWithApiParams)
     apiRequestWithOAuthIfNeeded
   }
@@ -348,9 +440,19 @@ class WrapperController @Inject()(ws: WSClient) extends Controller {
   /** Add all query parameters to the request. */
   private def addQueryParameters(wrapper: RestApiWrapperTrait,
                                  request: WSRequest,
-                                 queryString: String): WSRequest = {
+                                 queryString: String,
+                                 page: Option[String],
+                                 country: Option[String]): WSRequest = {
 
     var url_with_params = wrapper.apiUrl+"?"
+
+    if(wrapper.sourceLocalName.equals("adzuna")){
+      var url_sb = new StringBuilder(url_with_params)
+      url_sb.setCharAt(34,country.get.charAt(0))
+      url_sb.setCharAt(35,country.get.charAt(1))
+      url_sb.setCharAt(44,page.get.charAt(0))
+      url_with_params = url_sb.toString()
+    }
 
     for ((k,v) <- wrapper.searchQueryAsParam(queryString)){
       url_with_params = url_with_params.concat(k+"="+v+"&")
@@ -360,9 +462,14 @@ class WrapperController @Inject()(ws: WSClient) extends Controller {
       url_with_params = url_with_params.concat(k+"="+v+"&")
     }
 
-    val apiRequest: WSRequest = ws.url(url_with_params.dropRight(1))
+    if(wrapper.sourceLocalName.equals("indeed")){
+      url_with_params = url_with_params.concat("co="+country.get+"&")
+    }
 
-    apiRequest.withHeaders(wrapper.headersParams.toSeq: _*)
+    val apiRequest: WSRequest = ws.url(url_with_params.dropRight(1))
+    val final_url = apiRequest.withHeaders(wrapper.headersParams.toSeq: _*)
+    print(final_url.url)
+    final_url
   }
 
   /** Signs the request if the [[RestApiOAuthTrait]] is configured. */

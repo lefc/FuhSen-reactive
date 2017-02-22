@@ -29,7 +29,7 @@ class AdzunaWrapper extends RestApiWrapperTrait with SilkTransformableTrait {
     "results_per_page" -> "50")
 
   /** Headers that should be added to the request. */
-  override def headersParams: Map[String, String] = Map("Accept" -> "application/json")
+  override def headersParams: Map[String, String] = Map("content-type" -> "application/json")
 
   /** Returns for a given query string the representation as query parameter for the specific API. */
   override def searchQueryAsParam(queryString: String): Map[String, String] = {

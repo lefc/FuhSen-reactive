@@ -17,6 +17,7 @@ package controllers;
 
 import controllers.de.fuhsen.wrappers.security.TokenManager;
 import play.mvc.*;
+import play.Play;
 import views.html.*;
 import java.io.BufferedReader;
 import java.io.IOException;
@@ -61,54 +62,25 @@ public class Application extends Controller {
         return ok(json_res);
     }
 
-    public Result postRequest() {
+    public String postRequest(String keyword, String country) {
         try
         {
-            OAuthConsumer consumer = new DefaultOAuthConsumer(
-                    "KpS6AIhMLWMR8yTgvxRQ5Oycq",
-                    "wbZ69OmzFChSdvoBmYqIPMvj7Ry5iR5zICz7EB7jmHQDUZ4vW3");
-
-            consumer.setTokenWithSecret("399064019-7i86JOLjsUfNRQQvn4siajRibVUpSS1jE9FXJ4Fh","KqLjT9i6P45SmOXjs7RzDi4IpSI6vwL5oEaTqMIYilwlo");
-
-            URL url = new URL("https://api.twitter.com/1.1/users/search.json?count=100&q=Collarana");
-            HttpURLConnection conn = (HttpURLConnection) url.openConnection();
-            conn.setDoOutput(true);
-            conn.setRequestMethod("GET");
-            consumer.sign(conn);
-
-            if (conn.getResponseCode() != 200) {
-                return ok("NOT OK "+conn.getResponseCode()+" "+conn.getResponseMessage());
-            }
-            else {
-                BufferedReader br = new BufferedReader(new InputStreamReader(
-                        (conn.getInputStream())));
-
-                String finalOutput = "";
-                String output;
-                System.out.println("Output from Server .... \n");
-                while ((output = br.readLine()) != null) {
-                    finalOutput += output;
-                }
-
-                conn.disconnect();
-                return ok("OK "+finalOutput);
-            }
-
-            /*URL url = new URL("https://us.jooble.org/api/6faa2158-1a6b-41da-952d-97ef5b7074b2");
+            URL url = new URL("https://"+country+Play.application().configuration().getString("jooble.search.url")+Play.application().configuration().getString("jooble.search.api_key."+country));
             HttpURLConnection conn = (HttpURLConnection) url.openConnection();
             conn.setDoOutput(true);
             conn.setRequestMethod("GET");
             conn.setRequestProperty("Content-Type", "application/x-www-form-urlencoded");
             conn.setRequestProperty("Content-Length", "17");
 
-            String input = "{keywords:'java'}";
+            String input = "{keywords:'"+keyword+"'}";
 
             OutputStream os = conn.getOutputStream();
             os.write(input.getBytes());
             os.flush();
 
             if (conn.getResponseCode() != 200) {
-                return ok("NOT OK "+conn.getResponseCode()+" "+conn.getResponseMessage());
+                //return ok("NOT OK "+conn.getResponseCode()+" "+conn.getResponseMessage());
+                return "NOT OK "+conn.getResponseCode()+" "+conn.getResponseMessage();
             }
             else {
                 BufferedReader br = new BufferedReader(new InputStreamReader(
@@ -122,13 +94,13 @@ public class Application extends Controller {
                 }
 
                 conn.disconnect();
-                return ok("OK "+finalOutput);
-            }*/
-        }catch(Exception e) { return ok("NOT OK Exception "+e.getMessage()); }
+                //return ok("OK "+finalOutput);
+                return finalOutput;
+            }
+        //}catch(Exception e) { return ok("NOT OK Exception "+e.getMessage()); }
+        }catch(Exception e) { return "NOT OK Exception "+e.getMessage(); }
 
     }
 
 
 }
-
-

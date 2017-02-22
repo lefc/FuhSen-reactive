@@ -7,7 +7,7 @@ GET     /                                                   controllers.Applicat
 GET     /results                                            controllers.Application.results()
 GET     /details                                            controllers.Application.details()
 GET     /keyword                                            controllers.Application.getKeyword()
-GET    /screenshot                                          controllers.de.fuhsen.engine.ScreenshotController.screenshots(url: String)
+GET     /screenshot                                         controllers.de.fuhsen.engine.ScreenshotController.screenshots(url: String)
 
 # Search Engine API routes
 POST    /engine/api/searches                                controllers.de.fuhsen.engine.SearchEngineController.startSession(query: String)
@@ -35,6 +35,9 @@ GET     /:wrapperId/getToken                                controllers.de.fuhse
 GET     /:wrapperId/code2token                              controllers.de.fuhsen.wrappers.security.TokenRetrievalController.code2token(code:String, wrapperId: String)
 GET     /:wrapperId/code2tokenX                             controllers.de.fuhsen.wrappers.security.TokenRetrievalController.code2tokenX(wrapperId: String, oauth_token:String, oauth_verifier:String)
 GET     /:wrapperId/getTokenLifeLength                      controllers.Application.TokenLifeLength(wrapperId: String)
+
+# EDSA endpoint
+GET     /edsa/:edsaWrapperId/search                         controllers.de.fuhsen.wrappers.WrapperController.edsa_search(edsaWrapperId: String)
 
 # Map static resources from the /public folder to the /assets URL path
 GET     /assets/*file                                       controllers.Assets.versioned(path="/public", file: Asset)

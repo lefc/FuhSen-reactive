@@ -1,0 +1,18 @@
+@prefix geo:   <http://www.w3.org/2003/01/geo/wgs84_pos#> .
+@prefix schema: <http://schema.org/> .
+@prefix edsa:  <http://www.edsa-project.eu/edsa#> .
+@prefix geonames: <http://www.geonames.org/ontology#> .
+@prefix rdf:   <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix xml:   <http://www.w3.org/XML/1998/namespace> .
+@prefix xsd:   <http://www.w3.org/2001/XMLSchema#> .
+@prefix rdfs:  <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix ns2:   <http://schema.org/> .
+@prefix ns1:   <http://www.geonames.org/ontology#> .
+@prefix ns4:   <http://www.w3.org/2003/01/geo/wgs84_pos#> .
+@prefix ns3:   <http://www.edsa-project.eu/edsa#> .
+
+<http://www.edsa-project.eu/skill/xml>
+        ns3:lexicalValue  "xml" .
+
+<http://www.edsa-project.eu/skill/expresso>
+        ns3:lexicalValue  "java" .
