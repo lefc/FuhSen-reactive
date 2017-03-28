@@ -25,7 +25,7 @@ import controllers.de.fuhsen.wrappers.dataintegration.{EntityLinking, SilkConfig
 import controllers.de.fuhsen.wrappers.security.{RestApiOAuth2Trait, RestApiOAuthTrait}
 import org.apache.jena.graph.Triple
 import org.apache.jena.query.{Dataset, DatasetFactory, QueryExecutionFactory, QueryFactory}
-import org.apache.jena.rdf.model.{Model, ModelFactory}
+import org.apache.jena.rdf.model.{Model, ModelFactory, Property, RDFNode, Resource, ResourceFactory, Statement, StmtIterator}
 import org.apache.jena.riot.Lang
 import org.apache.jena.sparql.core.Quad
 import play.Logger
@@ -37,9 +37,12 @@ import play.api.mvc.{Action, Controller, Result}
 import utils.dataintegration.RDFUtil._
 import utils.dataintegration.{RDFUtil, RequestMerger, UriTranslator}
 import controllers.de.fuhsen.common.{ApiError, ApiResponse, ApiSuccess}
+import play.api.libs.json.Json.{parse, _}
 
 import scala.collection.mutable.{ArrayBuffer, ListBuffer}
-import scala.concurrent.Future
+import scala.concurrent.{Await, Future}
+import scala.util.{Failure, Success, Try}
+import scala.concurrent.duration._
 
 /**
   * Handles requests to API wrappers. Wrappers must at least implement [[RestApiWrapperTrait]].
@@ -64,12 +67,10 @@ class WrapperController @Inject()(ws: WSClient) extends Controller {
     }
   }
 
-  def edsa_search(edsaWrapperId: String) = Action.async {
-
-    val model_skills : Model = ModelFactory.createDefaultModel()
+  def edsa_search(edsaWrapperId: String) = Action {
+    val model_skills: Model = ModelFactory.createDefaultModel()
     model_skills.read("EDSA_docs/skillNames_temp.ttl")
     val skill_list = ListBuffer[String]()
-
     val skillsQuery = QueryFactory.create(
       s"""
          |PREFIX ns3: <http://www.edsa-project.eu/edsa#>
@@ -78,11 +79,11 @@ class WrapperController @Inject()(ws: WSClient) extends Controller {
          |}
       """.stripMargin)
     val resultSet_skills = QueryExecutionFactory.create(skillsQuery, model_skills).execSelect()
-    while( resultSet_skills.hasNext ){
+    while (resultSet_skills.hasNext) {
       skill_list.append(resultSet_skills.next.get("skill").toString)
     }
 
-    val model : Model = ModelFactory.createDefaultModel()
+    val model: Model = ModelFactory.createDefaultModel()
     model.read("EDSA_docs/countries_europe_eu_member_status.rdf")
     val country_list = ListBuffer[String]()
 
@@ -94,45 +95,96 @@ class WrapperController @Inject()(ws: WSClient) extends Controller {
          |}
       """.stripMargin)
     val resultSet = QueryExecutionFactory.create(keywordQuery, model).execSelect()
-    while( resultSet.hasNext ){
+    while (resultSet.hasNext) {
       countryToISO8601(resultSet.next.get("country").toString) match {
         case Some(value) => country_list.append(value)
         case None =>
       }
     }
-
     val requestMerger = new RequestMerger()
     val wrapper = WrapperController.wrapperMap.get(edsaWrapperId).get
+    for(x <- country_list ;y <- skill_list){
+      var exists_next_page = true
+      var page_count = 1
+      while(exists_next_page) {
+        var res = Await.result(execQueryAgainstWrapper(y, wrapper, Option(page_count.toString), Option(x)), 10 second) //Duration.Inf, we could wait infinitely with ths, but is better to have an upper boundary.
+        res match {
+          case ApiSuccess(responseBody) =>
+            var current_model = rdfStringToModel(responseBody, Lang.TURTLE.getName)
+            val countQuery = QueryFactory.create(
+              s"""
+                 |PREFIX el:<http://www.semanticweb.org/elisasibarani/ontologies/2016/0/untitled-ontology-51#>
+                 |SELECT (COUNT(DISTINCT ?id) as ?count)
+                 |WHERE {?s el:id ?id .
+                 |}
+                  """.stripMargin)
+            val count_ids = QueryExecutionFactory.create(countQuery, current_model).execSelect()
+            count_ids.next.getLiteral("count").getValue.asInstanceOf[Int] compare wrapper.max_results match {
+              case 0 => page_count += 1
+              case -1 => exists_next_page = false
+              case 1 => page_count += 1 //No deberia pasar nunca.
+            }
+            requestMerger.addWrapperResult(geonamesEnrichment(current_model), wrapper.sourceUri)
+        }
+      }
+    }
+    val json_model = requestMerger.serializeMergedModel(Lang.JSONLD)
+    val pw = new PrintWriter(new File("EDSA_docs/complete.ttl"))
+    pw.write(json_model)
+    pw.close
+    Ok(json_model)
+  }
 
-    val future_bodies =  for { x <- country_list
-                               y <- skill_list
-    } yield (
-        execQueryAgainstWrapper(y, wrapper, Option("1"), Option(x)) map {
-                    result => result match {
-                      case ApiSuccess(responseBody) => rdfStringToModel(responseBody, Lang.TURTLE.getName)
-                      //case _: ApiError =>
-                    }
-                  }
-      )
+  private def geonamesEnrichment(model: Model): Model = {
+    var iter:StmtIterator = model.listStatements(null, model.createProperty("http://schema.org/jobLocation"), null);
 
-    Future.sequence(future_bodies) map {
-      models => for(current_model <- models){
-        requestMerger.addWrapperResult(current_model, wrapper.sourceUri)
+    val future_statements = ListBuffer[Future[Model]]()
+    val complete_model = ModelFactory.createDefaultModel()
+
+    while (iter.hasNext()) {
+      var stmt:Statement      = iter.nextStatement();  // get next statement
+      var subject:Resource   = stmt.getSubject();     // get the subject
+      var predicate:Property = stmt.getPredicate();   // get the predicate
+      var rdf_object:RDFNode = stmt.getObject();      // get the object
+
+      val future_stm =
+          ws.url(ConfigFactory.load.getString("geonames.search.url"))
+          .withQueryString("q"->rdf_object.asLiteral().getString,
+                           "formatted"-> "true",
+                           "maxRows"->"10",
+                           "username"->"camilom",
+                           "style"->"full").get.map(
+          response => {
+            val new_model = ModelFactory.createDefaultModel()
+            val lat = (((Json.parse(response.body) \ "geonames") (0) \ "lat").get).toString()
+            val lng = (((Json.parse(response.body) \ "geonames") (0) \ "lng").get).toString()
+
+            new_model.add(ResourceFactory.createStatement(subject, ResourceFactory.createProperty("http://schema.org/jobLocation_fuhsen_LAT"), ResourceFactory.createTypedLiteral(lat)))
+            new_model.add(ResourceFactory.createStatement(subject, ResourceFactory.createProperty("http://schema.org/jobLocation_fuhsen_LNG"), ResourceFactory.createTypedLiteral(lng)))
+            new_model
+          }
+        )
+
+      future_statements += future_stm
+
+      future_stm.map {
+        res => {
+          complete_model.add(res)
+        }
       }
 
-      val pw = new PrintWriter(new File("EDSA_docs/complete.ttl"))
-      pw.write(requestMerger.serializeMergedModel(Lang.NTRIPLES))
-      pw.close
-
-      //As the results could be enormous, this line is just for testing, should be change to "Ok()" (or similar) when selecting all the skills and all the countries.
-      Ok(requestMerger.serializeMergedModel(Lang.NTRIPLES))
     }
+
+    val f = Future.sequence(future_statements)
+    Await.ready(f, Duration.Inf)
+
+    complete_model.add(model)
   }
 
   private def countryToISO8601(country: String): Option[String] = {
     country match {
       //case "United Kingdom" => Some("gb")
-      case "Germany" => Some("de")
+      //case "Germany" => Some("de")
       case "France" => Some("fr")
       //case "Netherlands" => Some("nl")
       //case "Poland" => Some("pl")
@@ -145,7 +197,7 @@ class WrapperController @Inject()(ws: WSClient) extends Controller {
     val apiRequest = createApiRequest(wrapper, query, page: Option[String], country: Option[String])
     val apiResponse = executeApiRequest(apiRequest, wrapper)
     val customApiResponse = customApiHandling(wrapper, apiResponse)
-    transformApiResponse(wrapper, customApiResponse, query, country)
+    transformApiResponse(wrapper, customApiResponse, query, country, page)
   }
 
   /**
@@ -307,9 +359,10 @@ class WrapperController @Inject()(ws: WSClient) extends Controller {
   private def transformApiResponse(wrapper: RestApiWrapperTrait,
                                    apiResponse: Future[ApiResponse],
                                    query: String,
-                                   country: Option[String]): Future[ApiResponse] = {
+                                   country: Option[String],
+                                   page: Option[String]): Future[ApiResponse] = {
     if(wrapper.sourceLocalName.equals("jooble")) {
-      val joobleResponse = new Application().postRequest(query, country.get)
+      val joobleResponse = new Application().postRequest(query, country.get, page.get)
       Logger.debug("PRE-SILK (JOOBLE): "+joobleResponse )
       handleSilkTransformation(wrapper, joobleResponse.replace("\\r", ""))
     }else{
@@ -447,12 +500,12 @@ class WrapperController @Inject()(ws: WSClient) extends Controller {
     var url_with_params = wrapper.apiUrl+"?"
 
     if(wrapper.sourceLocalName.equals("adzuna")){
-      var url_sb = new StringBuilder(url_with_params)
+      var url_sb = new StringBuilder(wrapper.apiUrl)
       url_sb.setCharAt(34,country.get.charAt(0))
       url_sb.setCharAt(35,country.get.charAt(1))
-      url_sb.setCharAt(44,page.get.charAt(0))
-      url_with_params = url_sb.toString()
-    }
+      url_sb.append(page.get)
+      url_with_params = url_sb.toString()+"?"
+      }
 
     for ((k,v) <- wrapper.searchQueryAsParam(queryString)){
       url_with_params = url_with_params.concat(k+"="+v+"&")
@@ -463,6 +516,7 @@ class WrapperController @Inject()(ws: WSClient) extends Controller {
     }
 
     if(wrapper.sourceLocalName.equals("indeed")){
+      url_with_params = url_with_params.concat("start="+ ((page.get.toInt - 1 ) * wrapper.max_results ) +"&")
       url_with_params = url_with_params.concat("co="+country.get+"&")
     }
 
