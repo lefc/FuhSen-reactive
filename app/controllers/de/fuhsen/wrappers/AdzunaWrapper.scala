@@ -60,4 +60,6 @@ class AdzunaWrapper extends RestApiWrapperTrait with SilkTransformableTrait {
 
   /** The project id of the Silk project */
   override def projectId: String = ConfigFactory.load.getString("silk.socialApiProject.id")
+
+  override def max_results: Int = 50
 }
