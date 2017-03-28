@@ -11,8 +11,4 @@
 @prefix ns4:   <http://www.w3.org/2003/01/geo/wgs84_pos#> .
 @prefix ns3:   <http://www.edsa-project.eu/edsa#> .
 
-<http://www.edsa-project.eu/skill/xml>
-        ns3:lexicalValue  "xml" .
-
-<http://www.edsa-project.eu/skill/expresso>
-        ns3:lexicalValue  "java" .
+<http://www.edsa-project.eu/skill/xml> ns3:lexicalValue  "mesos" .
