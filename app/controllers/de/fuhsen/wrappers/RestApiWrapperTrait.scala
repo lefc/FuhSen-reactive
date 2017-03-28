@@ -64,4 +64,6 @@ trait RestApiWrapperTrait {
   def requestType = "GET"
 
   def postBody = ""
+
+  def max_results = 0
 }
