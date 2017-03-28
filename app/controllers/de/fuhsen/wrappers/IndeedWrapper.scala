@@ -31,7 +31,7 @@ class IndeedWrapper extends RestApiWrapperTrait with SilkTransformableTrait {
     "radius" -> "",
     "st" -> "",
     "jt" -> "",
-    "start" -> "",
+    //"start" -> "",
     "limit" -> "25",
     "fromage" -> "",
     "filter" -> "",
@@ -74,4 +74,5 @@ class IndeedWrapper extends RestApiWrapperTrait with SilkTransformableTrait {
   /** The project id of the Silk project */
   override def projectId: String = ConfigFactory.load.getString("silk.socialApiProject.id")
 
+  override def max_results: Int = 25
 }
