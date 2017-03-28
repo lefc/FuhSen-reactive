@@ -62,7 +62,7 @@ public class Application extends Controller {
         return ok(json_res);
     }
 
-    public String postRequest(String keyword, String country) {
+    public String postRequest(String keyword, String country, String page) {
         try
         {
             URL url = new URL("https://"+country+Play.application().configuration().getString("jooble.search.url")+Play.application().configuration().getString("jooble.search.api_key."+country));
@@ -72,7 +72,7 @@ public class Application extends Controller {
             conn.setRequestProperty("Content-Type", "application/x-www-form-urlencoded");
             conn.setRequestProperty("Content-Length", "17");
 
-            String input = "{keywords:'"+keyword+"'}";
+            String input = "{keywords:'"+keyword+"',page:'"+ page +"'}";
 
             OutputStream os = conn.getOutputStream();
             os.write(input.getBytes());
