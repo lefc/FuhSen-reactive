@@ -65,4 +65,5 @@ class JoobleWrapper extends RestApiWrapperTrait with SilkTransformableTrait {
   //Todo: Update with keyword comming from the request.
   override def postBody: String = "{'keywords':'java'}"
 
+  override def max_results: Int = 20
 }
