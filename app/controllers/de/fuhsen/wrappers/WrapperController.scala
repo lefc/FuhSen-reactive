@@ -67,6 +67,16 @@ class WrapperController @Inject()(ws: WSClient) extends Controller {
     }
   }
 
+  def push2Dydra(n3_model: String): Future[String] = {
+    val dydra_push_response =
+      ws.url(ConfigFactory.load.getString("dydra.endpoint.url"))
+        .withQueryString("auth_token"->ConfigFactory.load.getString("dydra.token")).withQueryString("graph"->"http://example.com/EDSA").withHeaders("Content-Type"->"text/rdf+n3").post(n3_model).map(
+        response => "DYDRA.RESPONSE: "+response.body
+      )
+
+    dydra_push_response
+  }
+
   def edsa_search(edsaWrapperId: String) = Action {
     val model_skills: Model = ModelFactory.createDefaultModel()
     model_skills.read("EDSA_docs/skillNames_temp.ttl")
@@ -101,13 +111,13 @@ class WrapperController @Inject()(ws: WSClient) extends Controller {
         case None =>
       }
     }
-    val requestMerger = new RequestMerger()
+    var requestMerger = new RequestMerger()
     val wrapper = WrapperController.wrapperMap.get(edsaWrapperId).get
     for(x <- country_list ;y <- skill_list){
       var exists_next_page = true
       var page_count = 1
       while(exists_next_page) {
-        var res = Await.result(execQueryAgainstWrapper(y, wrapper, Option(page_count.toString), Option(x)), 10 second) //Duration.Inf, we could wait infinitely with ths, but is better to have an upper boundary.
+        var res = Await.result(execQueryAgainstWrapper(y, wrapper, Option(page_count.toString), Option(x)), Duration.Inf) //Duration.Inf, we could wait infinitely with ths, but is better to have an upper boundary.
         res match {
           case ApiSuccess(responseBody) =>
             var current_model = rdfStringToModel(responseBody, Lang.TURTLE.getName)
@@ -127,12 +137,21 @@ class WrapperController @Inject()(ws: WSClient) extends Controller {
             requestMerger.addWrapperResult(geonamesEnrichment(current_model), wrapper.sourceUri)
         }
       }
+
+      val serializedN3:String = requestMerger.serializeMergedModel(Lang.N3)
+      //println(serializedN3)
+      var res_dydra = Await.result(push2Dydra(serializedN3), Duration.Inf)
+      println("FINISHED: " + x + " - " + y + " - " + res_dydra)
+      requestMerger = new RequestMerger()
     }
-    val json_model = requestMerger.serializeMergedModel(Lang.JSONLD)
-    val pw = new PrintWriter(new File("EDSA_docs/complete.ttl"))
-    pw.write(json_model)
-    pw.close
-    Ok(json_model)
+//    val json_model = requestMerger.serializeMergedModel(Lang.JSONLD)
+//    val pw = new PrintWriter(new File("EDSA_docs/complete.ttl"))
+//    pw.write(json_model)
+//    pw.close
+
+    //push2Dydra(requestMerger.serializeMergedModel(Lang.N3))
+
+    Ok("FINISHED")
   }
 
   private def geonamesEnrichment(model: Model): Model = {
@@ -184,8 +203,8 @@ class WrapperController @Inject()(ws: WSClient) extends Controller {
   private def countryToISO8601(country: String): Option[String] = {
     country match {
       //case "United Kingdom" => Some("gb")
-      //case "Germany" => Some("de")
-      case "France" => Some("fr")
+      case "Germany" => Some("de")
+      //case "France" => Some("fr")
       //case "Netherlands" => Some("nl")
       //case "Poland" => Some("pl")
       //case "Russia" => Some("ru")
