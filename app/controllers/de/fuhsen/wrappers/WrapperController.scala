@@ -67,10 +67,51 @@ class WrapperController @Inject()(ws: WSClient) extends Controller {
     }
   }
 
+  def edsa_demand_search(edsaWrapperId: String) = Action {
+    var requestMerger = new RequestMerger()
+    val wrapper = WrapperController.wrapperMap.get(edsaWrapperId).get
+    var exists_next_page = true
+    var page_count = 1
+    while(exists_next_page) {
+      var res = Await.result(execQueryAgainstWrapper("", wrapper, Option(page_count.toString), None), Duration.Inf)
+      res match {
+        case ApiSuccess(responseBody) =>
+          Logger.debug("AFTER-SILK: ")
+          Logger.info(responseBody)
+          var current_model = rdfStringToModel(responseBody, Lang.TURTLE.getName)
+          val countQuery = QueryFactory.create(
+            s"""
+               |SELECT (COUNT(?name) as ?count)
+               |WHERE {?s <http://schema.org/name> ?name .
+               |}
+                """.stripMargin)
+          val count_ids = QueryExecutionFactory.create(countQuery, current_model).execSelect()
+          val value = count_ids.next.getLiteral("count").getValue.asInstanceOf[Int]
+          Logger.info("Count: "+ value)
+          value compare 0 match {
+            case 0 => exists_next_page = false
+            case -1 => page_count += 1
+            case 1 => page_count += 1 //No deberia pasar nunca.
+          }
+          requestMerger.addWrapperResult(geonamesEnrichment(current_model), wrapper.sourceUri)
+
+        case ApiError(status, message) =>
+          Logger.error("ERROR: Executing the query returned a status code of" + status + " - Message: " + message)
+          exists_next_page = false
+          None
+      }
+    }
+
+    val serializedN3:String = requestMerger.serializeMergedModel(Lang.N3)
+    var res_dydra = Await.result(push2Dydra(serializedN3), Duration.Inf)
+
+    Ok("FINISHED DEMAND")
+  }
+
   def push2Dydra(n3_model: String): Future[String] = {
     val dydra_push_response =
       ws.url(ConfigFactory.load.getString("dydra.endpoint.url"))
-        .withQueryString("auth_token"->ConfigFactory.load.getString("dydra.token")).withQueryString("graph"->"http://example.com/EDSA").withHeaders("Content-Type"->"text/rdf+n3").post(n3_model).map(
+        .withQueryString("auth_token"->ConfigFactory.load.getString("dydra.token")).withQueryString("graph"->"http://www.edsa-project.eu/edsa").withHeaders("Content-Type"->"text/rdf+n3").post(n3_model).map(
         response => "DYDRA.RESPONSE: "+response.body
       )
 
@@ -117,9 +158,11 @@ class WrapperController @Inject()(ws: WSClient) extends Controller {
       var exists_next_page = true
       var page_count = 1
       while(exists_next_page) {
-        var res = Await.result(execQueryAgainstWrapper(y, wrapper, Option(page_count.toString), Option(x)), Duration.Inf) //Duration.Inf, we could wait infinitely with ths, but is better to have an upper boundary.
+        var res = Await.result(execQueryAgainstWrapper(y, wrapper, Option(page_count.toString), Option(x)), Duration.Inf)
         res match {
           case ApiSuccess(responseBody) =>
+            Logger.debug("AFTER-SILK: ")
+            Logger.debug(responseBody)
             var current_model = rdfStringToModel(responseBody, Lang.TURTLE.getName)
             val countQuery = QueryFactory.create(
               s"""
@@ -129,19 +172,27 @@ class WrapperController @Inject()(ws: WSClient) extends Controller {
                  |}
                   """.stripMargin)
             val count_ids = QueryExecutionFactory.create(countQuery, current_model).execSelect()
-            count_ids.next.getLiteral("count").getValue.asInstanceOf[Int] compare wrapper.max_results match {
+
+            val value = count_ids.next.getLiteral("count").getValue.asInstanceOf[Int]
+            Logger.info("Count: "+ value)
+            value compare wrapper.max_results match {
               case 0 => page_count += 1
               case -1 => exists_next_page = false
               case 1 => page_count += 1 //No deberia pasar nunca.
             }
             requestMerger.addWrapperResult(geonamesEnrichment(current_model), wrapper.sourceUri)
+
+          case ApiError(status, message) =>
+            Logger.error("ERROR: Executing the query returned a status code of" + status + " - Message: " + message)
+            exists_next_page = false
+            None
         }
       }
 
       val serializedN3:String = requestMerger.serializeMergedModel(Lang.N3)
       //println(serializedN3)
       var res_dydra = Await.result(push2Dydra(serializedN3), Duration.Inf)
-      println("FINISHED: " + x + " - " + y + " - " + res_dydra)
+      print("FINISHED: " + x + " - " + y + " - " + res_dydra)
       requestMerger = new RequestMerger()
     }
 //    val json_model = requestMerger.serializeMergedModel(Lang.JSONLD)
@@ -202,12 +253,32 @@ class WrapperController @Inject()(ws: WSClient) extends Controller {
 
   private def countryToISO8601(country: String): Option[String] = {
     country match {
-      //case "United Kingdom" => Some("gb")
       case "Germany" => Some("de")
-      //case "France" => Some("fr")
-      //case "Netherlands" => Some("nl")
-      //case "Poland" => Some("pl")
-      //case "Russia" => Some("ru")
+//      case "United Kingdom" => Some("gb") //Jooble is uk?
+//      case "France" => Some("fr")
+//      case "Netherlands" => Some("nl")
+//      case "Poland" => Some("pl")
+//      case "Russia" => Some("ru")
+//      case "Romania" => Some("ro")
+//      case "Belarus" => Some("by")
+//      case "Ukraine" => Some("ua")
+//      case "Bosnia and Herzegovina" => Some("ba")
+//      case "Slovakia" => Some("sk")
+//      case "Czech Republic" => Some("cz")
+//      case "Austria" => Some("at")
+//      case "Belgium" => Some("be")
+//      case "Denmark" => Some("dk")
+//      case "Switzerland" => Some("ch")
+//      case "Ireland" => Some("ie")
+//      case "Hungary" => Some("hu")
+//      case "Bulgaria" => Some("bg")
+//      case "Portugal" => Some("pt")
+//      case "Spain" => Some("es")
+//      case "Finland" => Some("fi")
+//      case "Greece" => Some("gr")
+//      case "Sweden" => Some("se")
+//      case "Norway" => Some("no")
+//      case "Croatia" => Some("hr")
       case _ => None
     }
   }
@@ -393,7 +464,7 @@ class WrapperController @Inject()(ws: WSClient) extends Controller {
         case ApiSuccess(body) =>
           if(wrapper.sourceLocalName.equals("indeed")){
             val bodyS = body.replace("<?xml version='1.0' encoding='UTF-8'?>","")
-            Logger.debug("PRE-SILK: "+bodyS)
+            Logger.info("PRE-SILKK: "+bodyS)
             handleSilkTransformation(wrapper, bodyS)
           } else{
             Logger.debug("PRE-SILK: "+body)
@@ -539,6 +610,10 @@ class WrapperController @Inject()(ws: WSClient) extends Controller {
       url_with_params = url_with_params.concat("co="+country.get+"&")
     }
 
+    if(wrapper.sourceLocalName.equals("canvas") ||  wrapper.sourceLocalName.equals("openedx")){
+      url_with_params = url_with_params.concat("page="+ page.get +"&")
+    }
+
     val apiRequest: WSRequest = ws.url(url_with_params.dropRight(1))
     val final_url = apiRequest.withHeaders(wrapper.headersParams.toSeq: _*)
     print(final_url.url)
@@ -595,13 +670,18 @@ object WrapperController {
     "elasticsearch" -> new ElasticSearchWrapper(),
 
     //EDSA WRAPPERS:
-
     //ADZUNA
     "adzuna" -> new AdzunaWrapper(),
     //INDEED
     "indeed" -> new IndeedWrapper(),
     //JOOBLE
-    "jooble" -> new JoobleWrapper()
+    "jooble" -> new JoobleWrapper(),
+
+    //EDSA - DEMAND (Courses):
+    //OPEN EDX
+    "openedx"-> new OpenEDXWrapper(),
+    //CANVAS LMS
+    "canvas"-> new CanvasWrapper()
   )
 
   val sortedWrapperIds = wrapperMap.keys.toSeq.sortWith(_ < _)
