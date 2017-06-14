@@ -52,3 +52,7 @@ GET     /crawling/jobs/:crawlId                             controllers.de.fuhse
 GET     /crawling/jobs/:crawlId/progress                    controllers.de.fuhsen.crawling.CrawlerController.crawlJobProgressByCrawlId(crawlId: String)
 GET     /crawling/jobs/:crawlId/status                      controllers.de.fuhsen.crawling.CrawlerController.crawlStatusByCrawlId(crawlId: String)
 POST    /crawling/jobs/create                               controllers.de.fuhsen.crawling.CrawlerController.createCrawlJob
+
+# QMine
+GET     /qminer/sent                                        controllers.de.fuhsen.wrappers.QMinerController.send
+POST    /qminer/receive                                     controllers.de.fuhsen.wrappers.QMinerController.receive

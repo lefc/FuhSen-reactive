@@ -238,6 +238,8 @@ class WrapperController @Inject()(ws: WSClient) extends Controller {
 
   def edsa_search(edsaWrapperId: String) = Action {
     val model_skills: Model = ModelFactory.createDefaultModel()
+
+    //Step 1) Load Skills and Country
     model_skills.read("EDSA_docs/skillNames_temp.ttl")
     val skill_list = ListBuffer[String]()
     val skillsQuery = QueryFactory.create(
@@ -272,15 +274,21 @@ class WrapperController @Inject()(ws: WSClient) extends Controller {
     }
     var requestMerger = new RequestMerger()
     val wrapper = WrapperController.wrapperMap.get(edsaWrapperId).get
+
+    //Step 2) Loop to query the services for skill x country
     for(x <- country_list ;y <- skill_list){
       var exists_next_page = true
       var page_count = 1
       while(exists_next_page) {
+
+        //Step 3) Calling the REST API services
         var res = Await.result(execQueryAgainstWrapper(y, wrapper, Option(page_count.toString), Option(x)), Duration.Inf)
         res match {
           case ApiSuccess(responseBody) =>
             Logger.debug("AFTER-SILK: ")
             Logger.debug(responseBody)
+
+            //API Cursoring calculation
             var current_model = rdfStringToModel(responseBody, Lang.TURTLE.getName)
             val countQuery = QueryFactory.create(
               s"""
@@ -298,7 +306,9 @@ class WrapperController @Inject()(ws: WSClient) extends Controller {
               case -1 => exists_next_page = false
               case 1 => page_count += 1 //No deberia pasar nunca.
             }
+            //Step 4) Enrichment
             requestMerger.addWrapperResult(geonamesEnrichment(current_model), wrapper.sourceUri)
+            //Call here gate embedded
 
           case ApiError(status, message) =>
             Logger.error("ERROR: Executing the query returned a status code of" + status + " - Message: " + message)
